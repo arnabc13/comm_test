@@ -3,7 +3,6 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Accenture Comms Mock</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -230,6 +229,8 @@ details.sub p{font-size:14px;margin-top:6px}
 .fix-t td,.fix-t th{font-size:13.5px}
 .toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(20px + env(safe-area-inset-bottom,0px));background:var(--ink);color:var(--bg);padding:12px 16px;border-radius:8px;font-size:14px;max-width:min(92vw,520px);z-index:20;box-shadow:0 8px 24px rgba(0,0,0,.2)}
 .tapbar{position:fixed;left:0;right:0;bottom:0;z-index:25;background:var(--rec-soft);border-top:2px solid var(--rec);display:flex;gap:12px;align-items:center;justify-content:center;flex-wrap:wrap;padding-block:12px calc(12px + env(safe-area-inset-bottom,0px));padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+.miclog{font:12px/1.5 var(--f-mono);white-space:pre-wrap;background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:220px;overflow:auto;margin:8px 0 0}
+.tap-ans{width:100%;max-width:420px;min-height:64px;font-size:18px}
 .badge{font:600 11px var(--f-mono);background:var(--warn-soft);color:var(--warn);padding:3px 8px;border-radius:5px;margin-left:8px}
 @media (max-width:560px){.console-body{padding:28px 14px;min-height:320px}.big{font-size:46px}.prm{grid-template-columns:1fr 60px 30px}.ef-row{grid-template-columns:64px 1fr}}
 @media (prefers-reduced-motion:reduce){.wave i,.rec-dot,.console.rec .status .dot,.spinner{animation:none}.wave i{height:60%}}
@@ -1093,6 +1094,7 @@ function speakOne(text){return new Promise(res=>{
  speechSynthesis.speak(u);
 })}
 async function speak(text){
+ if(MIC.mode()!=='always'&&(MIC.on||MIC.want))await MIC.pause();
  try{speechSynthesis.cancel()}catch(e){}
  await wait(60);
  const parts=String(text).match(/[^.!?]+[.!?]*/g)||[text];
@@ -1106,26 +1108,39 @@ function tone(freq=880,dur=0.22,vol=0.16){return new Promise(res=>{const c=ac();
    each answer is the text recognised between the beep and the end of its timer. */
 const IOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 function tailAfter(s0,s1){if(!s0)return s1;if(s1.startsWith(s0))return s1.slice(s0.length).trim();const a=s0.split(' '),b=s1.split(' ');let k=0;while(k<a.length&&k<b.length&&a[k].toLowerCase()===b[k].toLowerCase())k++;return b.slice(k>=a.length-3?a.length:k).join(' ').trim()}
-const MIC={rec:null,want:false,on:false,failed:null,net:false,archived:'',sess:[],marks:[],confs:[],lastLen:0,subs:new Set(),offSince:null,
- full(){return (this.archived+' '+this.sess.map(x=>x.t).join(' ')).replace(/\s+/g,' ').trim()},
- _make(){const r=new SR();r.continuous=true;r.interimResults=true;r.maxAlternatives=1;
-  r.onstart=()=>{this.on=true;this.offSince=null;this.failed=null;tapUI()};
-  r.onresult=e=>{const now=performance.now();for(let i=e.resultIndex;i<e.results.length;i++){const x=e.results[i];const o=this.sess[i]||(this.sess[i]={t:'',f:false});o.t=x[0].transcript;if(x.isFinal&&!o.f){o.f=true;if(x[0].confidence>0)this.confs.push({at:now,c:x[0].confidence})}}
-   const L=this.full().length;if(L>this.lastLen)this.marks.push(now);this.lastLen=L;this.subs.forEach(f=>{try{f()}catch(_){}})};
-  r.onerror=e=>{if(['not-allowed','service-not-allowed','audio-capture'].includes(e.error))this.failed=e.error;else if(e.error==='network')this.net=true};
-  r.onend=()=>{this.archived=this.full();this.sess=[];this.lastLen=this.archived.length;this.on=false;this.offSince=performance.now();
+const MIC={rec:null,want:false,on:false,failed:null,net:false,archived:'',sess:[],marks:[],confs:[],lastLen:0,subs:new Set(),offSince:null,log:[],
+ /* 'always' = one session for the whole test (laptop); 'each' = pause while the voice speaks, restart at every beep (iPhone Safari) */
+ mode(){const m=S.settings.micMode2||'auto';return m==='auto'?(IOS?'tap':'always'):m},
+ note(m){this.log.push((performance.now()/1000).toFixed(1)+'s  '+m);if(this.log.length>60)this.log.shift();const el=document.getElementById('micLog');if(el)el.textContent=this.log.slice().reverse().join('\n')},
+ sessText(){let acc='';for(const x of this.sess){const t=(x&&x.t||'').trim();if(!t)continue;const A=acc.toLowerCase(),T=t.toLowerCase();if(acc&&T.startsWith(A))acc=t;else if(acc&&A.endsWith(T))continue;else acc=(acc+' '+t).trim()}return acc},
+ full(){return (this.archived+' '+this.sessText()).replace(/\s+/g,' ').trim()},
+ _archive(){this.archived=this.full();this.sess=[];this.lastLen=this.archived.length},
+ _make(){const r=new SR();r.continuous=true;r.interimResults=true;r.maxAlternatives=1;r.lang=S.settings.lang;const me=()=>r===this.rec;
+  r.onstart=()=>{this.note('mic started');if(!me())return;this.on=true;this.everOn=true;this.offSince=null;this.failed=null;tapUI()};
+  r.onaudiostart=()=>this.note('audio capture on');
+  r.onspeechstart=()=>this.note('speech detected');
+  r.onresult=e=>{if(!me())return;const now=performance.now();for(let i=e.resultIndex;i<e.results.length;i++){const x=e.results[i];const o=this.sess[i]||(this.sess[i]={t:'',f:false});o.t=x[0].transcript;if(x.isFinal&&!o.f){o.f=true;if(x[0].confidence>0)this.confs.push({at:now,c:x[0].confidence})}}
+   const L=this.full().length;if(L>this.lastLen)this.marks.push(now);this.lastLen=L;this.note('heard: “'+this.sessText().slice(-40)+'”');this.subs.forEach(f=>{try{f()}catch(_){}})};
+  r.onerror=e=>{this.note('error: '+e.error);if(!me())return;if(['not-allowed','service-not-allowed','audio-capture'].includes(e.error))this.failed=e.error;else if(e.error==='network')this.net=true};
+  r.onend=()=>{this.note('mic ended');if(!me())return;this._archive();this.on=false;this.offSince=performance.now();
    if(this.want&&!this.failed)setTimeout(()=>this._try(),150);tapUI()};
-  this.rec=r},
- _try(){if(!this.want||this.on||!SR)return;if(!this.rec)this._make();this.rec.lang=S.settings.lang;try{this.rec.start()}catch(e){}
+  this.rec=r;return r},
+ _try(){if(!this.want||this.on||!SR)return;
+  if(!this.rec||this.mode()!=='always'){const old=this.rec;if(old){this._archive();this.rec=null;try{old.abort()}catch(e){}}this._make()}
+  this.rec.lang=S.settings.lang;try{this.rec.start()}catch(e){this.note('start threw: '+(e&&e.name||e))}
   setTimeout(()=>{if(this.want&&!this.on&&this.offSince==null)this.offSince=performance.now()-2000;tapUI()},1500)},
- start(){if(!SR)return;this.want=true;this.failed=null;this.net=false;this._try()},
+ start(){if(!SR)return;this.want=true;this.failed=null;this.net=false;this.offSince=null;if(this.on&&this.mode()!=='always')return;this._try()},
  stop(){this.want=false;try{this.rec&&this.on&&this.rec.stop()}catch(e){}tapUI()},
+ async pause(){this.want=false;if(!this.rec)return;const r=this.rec;const was=this.on;this._archive();this.rec=null;this.on=false;try{r.abort()}catch(e){}if(was)await wait(250);tapUI()},
+ async waitOn(ms){const t0=performance.now();while(!this.on&&!this.failed&&performance.now()-t0<ms&&!(S.run&&S.run.aborted))await wait(80);return this.on},
  open(){return {t0:performance.now(),s0:this.full()}},
  since(w){return tailAfter(w.s0,this.full())},
  close(w,dur){const text=this.since(w);const ms=this.marks.filter(m=>m>=w.t0).map(m=>(m-w.t0)/1000);const cs=this.confs.filter(c=>c.at>=w.t0).map(c=>c.c);
   return {text,conf:cs.length?avg(cs):null,latency:text&&ms.length?Math.max(0,ms[0]-0.6):null,span:ms.length?ms[ms.length-1]-ms[0]:0,marks:ms,dur,fatal:this.failed,net:this.net}}
 };
-function tapUI(){const t=document.getElementById('tapMic');if(!t)return;const show=!!(S.run&&S.run.input==='speech'&&MIC.want&&!MIC.on&&!MIC.failed&&MIC.offSince!=null&&performance.now()-MIC.offSince>1000);t.hidden=!show}
+function tapUI(){const t=document.getElementById('tapMic');if(!t)return;const show=!!(S.run&&S.run.input==='speech'&&MIC.want&&!MIC.on&&!MIC.failed&&MIC.offSince!=null&&performance.now()-MIC.offSince>1000);
+ if(show){const sp=t.querySelector('span');if(sp)sp.innerHTML=MIC.mode()!=='always'?'<b>Tap to start your answer.</b> Safari needs a tap to switch the mic on.':'<b>Microphone paused.</b> Tap to keep recording your answers.';const b=document.getElementById('tapMicBtn');if(b)b.textContent=MIC.mode()!=='always'?'Tap to answer':'Turn mic back on'}
+ t.hidden=!show}
 setInterval(tapUI,1000);
 function unlockAudio(){ac();try{const u=new SpeechSynthesisUtterance(' ');u.volume=0;speechSynthesis.speak(u)}catch(e){}}
 
@@ -1158,6 +1173,7 @@ function renderHome(){
   <div class="cta-row">
    <button class="btn primary big" id="startFull">Start full mock (≈25 min)</button>
    <button class="btn" id="startDrill">Practice one section</button>
+   <button class="btn ghost" id="micCheck">Sound &amp; mic check</button>
   </div>
   ${srOk?'':`<p class="warn-box">This browser can't recognise speech, so answers will be typed. For the real spoken experience open this page in <b>Google Chrome</b> or <b>Microsoft Edge</b> on a laptop.</p>`}
  </section>
@@ -1203,6 +1219,7 @@ function renderHome(){
  $('#setRate').onchange=e=>{S.settings.rate=parseFloat(e.target.value);saveSettings()};
  $('#startFull').onclick=()=>gate(()=>startRun('full',['A','B','C','D','E','F','G','M']));
  $('#startDrill').onclick=renderDrillPicker;
+ $('#micCheck').onclick=()=>{S.input=null;unlockAudio();renderCheck(renderHome)};
 }
 function renderDrillPicker(){
  main.className='wrap';
@@ -1214,7 +1231,7 @@ function renderDrillPicker(){
 }
 function fillVoices(sel){const vs=voices();sel.innerHTML=vs.map(v=>`<option value="${esc(v.name)}">${esc(v.name)} (${esc(v.lang)})</option>`).join('')||'<option>Default voice</option>';if(S.voice)sel.value=S.voice.name}
 /* audio + mic check before first run */
-function gate(next){unlockAudio();if(S.input==='speech')MIC.start();if(S.input){next();return}renderCheck(next)}
+function gate(next){unlockAudio();if(S.input==='speech'&&MIC.mode()==='always')MIC.start();if(S.input){next();return}renderCheck(next)}
 function renderCheck(next){
  S.run=null;setTop();main.className='wrap';
  const typeNote=IOS?'On iPhone you can also type and tap the keyboard’s mic key to dictate.':'Timers are doubled when typing.';
@@ -1232,6 +1249,8 @@ function renderCheck(next){
    <div id="micOut" class="mic-out" aria-live="polite"></div></div>
  </div>
  <div id="micHelp"></div>
+ <div class="panel"><label class="field"><span>Microphone mode</span><select id="micMode"><option value="auto">Automatic (${IOS?'iPhone tap mode on this device':'laptop mode on this device'})</option><option value="tap">iPhone tap mode — tap once at each beep, then speak (most reliable on iPhone)</option><option value="each">iPhone mode — mic pauses while the voice speaks, restarts at each beep</option><option value="always">Laptop mode — one mic session for the whole test</option></select></label>
+  <details><summary class="small muted">Mic log (shows what the browser is doing)</summary><pre id="micLog" class="miclog"></pre></details></div>
  <div class="cta-row"><button class="btn primary big" id="begin" disabled>Begin assessment</button><button class="btn ghost" id="useType">Type answers instead</button><button class="btn ghost" id="back">← Back</button></div>
  <p class="tiny muted">${typeNote}</p>`;
  const sel=$('#voiceSel');fillVoices(sel);sel.onchange=()=>{S.settings.voiceName=sel.value;saveSettings();pickVoice()};
@@ -1239,14 +1258,18 @@ function renderCheck(next){
  $('#back').onclick=()=>{MIC.stop();renderHome()};
  $('#useType').onclick=()=>{MIC.stop();S.input='type';unlockAudio();next()};
  if(!SR){$('#micHelp').innerHTML=`<p class="warn-box">Speech recognition isn't available in this browser. Use Chrome or Edge on a laptop, or Safari on iPhone, to answer by speaking. You can continue with typed answers.</p>`}
+ const mm=$('#micMode');mm.value=S.settings.micMode2||'auto';mm.onchange=async()=>{await MIC.pause();S.settings.micMode2=mm.value;saveSettings();MIC.note('mode → '+MIC.mode())};
+ MIC.note('page ready · '+(IOS?'iOS':'desktop')+' · '+(SR?'speech recognition available':'NO speech recognition')+' · mode '+MIC.mode());
  const st=$('#micState');
  const poll=setInterval(()=>{if(!document.body.contains(st)){clearInterval(poll);return}
   if(MIC.failed){st.innerHTML='<span class="bad-t">Microphone blocked.</span>';$('#micHelp').innerHTML=micHelp(MIC.failed);$('#micTest').disabled=true}
   else if(MIC.on){st.innerHTML='<span class="rec-dot"></span> <span class="good-t">Microphone is on</span>';$('#micTest').disabled=false;$('#micHelp').innerHTML=''}
-  else if(MIC.want){st.innerHTML='Waiting for permission…'}},300);
+  else if(MIC.want){st.innerHTML='Waiting for permission…'}
+  else if(MIC.everOn){st.innerHTML='<span class="good-t">Permission granted.</span> The mic turns on automatically at each beep.'}},300);
  $('#micOn').onclick=()=>{unlockAudio();MIC.start()};
  $('#micTest').onclick=async()=>{
   const out=$('#micOut');const btn=$('#micTest');btn.disabled=true;
+  MIC.start();if(!await MIC.waitOn(2500)){btn.disabled=false;out.innerHTML='<span class="warn-t">The microphone did not start.</span> Tap Test again. If it keeps failing, check the mic log below.';return}
   out.innerHTML='<span class="rec-dot"></span> Listening… speak now';
   const w=MIC.open();const f=()=>{const t=MIC.since(w);if(t)out.innerHTML='<span class="rec-dot"></span> '+esc(t)};MIC.subs.add(f);
   await wait(6000);await wait(800);MIC.subs.delete(f);const r=MIC.close(w,6);btn.disabled=false;
@@ -1256,14 +1279,15 @@ function renderCheck(next){
   const a=align(words(norm('I am ready for my communication assessment')),words(norm(r.text)));
   out.innerHTML=`Heard: “${esc(r.text)}” <span class="pill ${a.score>.8?'good':a.score>.5?'ok':'bad'}">${Math.round(a.score*100)}% match</span>`;
   $('#begin').disabled=false;
+  if(MIC.mode()!=='always')MIC.pause();
  };
- $('#begin').onclick=()=>{S.input='speech';unlockAudio();MIC.start();next()};
+ $('#begin').onclick=()=>{S.input='speech';unlockAudio();if(MIC.mode()==='always')MIC.start();next()};
 }
 function micHelp(code){
  const inFrame=window.top!==window.self;
  return `<div class="warn-box"><b>The microphone isn't available here (${esc(code)}).</b>
  ${inFrame?'<p>This page is running inside Claude, which cannot use your microphone. Open your own hosted copy (see the chat for how) to practise speaking, or take the mock here with typed answers.</p>':''}
- <ol>${IOS?'<li>iPhone: Settings → Safari → Microphone → Allow. Also Settings → Privacy & Security → Speech Recognition → allow Safari. Then reload.</li><li>Use Safari, not Chrome, on iPhone.</li>':'<li>Click the lock/mic icon in the address bar → Microphone → Allow → reload.</li><li>Windows: Settings → Privacy → Microphone → allow desktop apps and your browser.</li>'}
+ <ol>${IOS?'<li>iPhone: Settings → Safari → Microphone → Allow. Also Settings → Privacy & Security → Speech Recognition → allow Safari. Then reload.</li><li>Turn on dictation: Settings → General → Keyboard → Enable Dictation. Safari\u2019s speech recognition does not work without it.</li><li>Check Screen Time is not blocking it: Settings → Screen Time → Content & Privacy Restrictions → Allowed Apps → Siri & Dictation on.</li><li>Use Safari, not Chrome, on iPhone.</li>':'<li>Click the lock/mic icon in the address bar → Microphone → Allow → reload.</li><li>Windows: Settings → Privacy → Microphone → allow desktop apps and your browser.</li>'}
  <li>Open the test from an <b>https://</b> link (not a file from your Downloads) so the browser remembers the permission.</li></ol></div>`;
 }
 
@@ -1312,6 +1336,7 @@ function consoleHtml(sec,label,count){
    <div class="wave" id="wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div>
    <div class="ptext" id="ptext" hidden></div>
    <textarea class="typebox" id="typebox" hidden placeholder="${IOS?'Type, or tap the keyboard mic to dictate…':'Type your answer here…'}" spellcheck="false" autocomplete="off"></textarea>
+   <button class="btn primary big tap-ans" id="tapAns" type="button" hidden>● Tap and speak</button>
    <div class="live mono" id="live" hidden></div>
   </div>
   <div class="console-foot"><span class="small muted" id="hint">${count||''}</span><button class="btn" id="skipBtn" hidden>Next →</button></div>
@@ -1352,11 +1377,23 @@ async function capture(seconds,it){
  setStatus('rec',S.run.input==='speech'?'Recording — speak now':'Type your answer');
  const practice=S.settings.mode==='practice';const skip=$('#skipBtn');
  S.skip=false;if(practice){skip.hidden=false;skip.onclick=()=>{S.skip=true}}
- const t0=performance.now();
- const tick=()=>new Promise(res=>{const iv=setInterval(()=>{const left=Math.max(0,seconds-(performance.now()-t0)/1000);setRing(left,seconds);if(left<=0||S.skip||(S.run&&S.run.aborted)){clearInterval(iv);res()}},100)});
+ let t0=performance.now();
+ const tick=()=>new Promise(res=>{t0=performance.now();const iv=setInterval(()=>{const left=Math.max(0,seconds-(performance.now()-t0)/1000);setRing(left,seconds);if(left<=0||S.skip||(S.run&&S.run.aborted)){clearInterval(iv);res()}},100)});
  if(S.run.input==='speech'){
   const live=$('#live');
-  if(!MIC.want)MIC.start();
+  if(MIC.mode()==='tap'){
+   setStatus('idle','Tap the button, then speak');
+   const tb=$('#tapAns');tb.hidden=false;
+   await new Promise(res=>{let done=false;const go=()=>{if(done)return;done=true;clearTimeout(tm);clearInterval(ai);res()};tb.onclick=()=>{MIC.start();go()};const tm=setTimeout(go,10000);const ai=setInterval(()=>{if(S.run&&S.run.aborted)go()},200)});
+   tb.hidden=true;guard();
+   if(MIC.want)await MIC.waitOn(2500);
+   setStatus('rec',MIC.on?'Recording — speak now':'No answer recorded');
+   if(!MIC.on)seconds=Math.min(seconds,3);
+  }else if(MIC.mode()==='each'){
+   setStatus('idle','Starting microphone…');MIC.start();
+   if(!await MIC.waitOn(1500)){setStatus('idle','Tap the button below to answer');await MIC.waitOn(30000)}
+   guard();setStatus('rec','Recording — speak now');
+  }else if(!MIC.want)MIC.start();
   const w=MIC.open();
   const f=()=>{const t=MIC.since(w);if(!t)return;const s=$('#status');if(s)s.classList.add('heard');if(practice&&live){live.hidden=false;live.textContent=t}};
   MIC.subs.add(f);
@@ -1364,6 +1401,7 @@ async function capture(seconds,it){
   setStatus('idle','Saving…');await wait(900);
   MIC.subs.delete(f);
   const out=MIC.close(w,seconds);
+  if(MIC.mode()!=='always')await MIC.pause();
   if(out.fatal){S.run.input='type';S.input='type';MIC.stop();toast('Microphone stopped working ('+out.fatal+'). Switching to typed answers for the rest of this attempt.',8000)}
   else if(out.net){toast('Speech service lost connection. Check your internet.',6000);MIC.net=false}
   return out;
